@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: cv-screening-app
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: streamlit run app.py --server.port $PORT --server.enableCORS false
+    branch: main
+    autoDeploy: true
+    plan: free
