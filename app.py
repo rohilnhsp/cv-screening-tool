@@ -7,6 +7,9 @@ import pandas as pd
 from dateutil import parser
 from datetime import datetime
 
+# ----------------------------
+# Password Protection
+# ----------------------------
 def check_password():
     def password_entered():
         if st.session_state["password"] == "cvsecure2024":
@@ -25,6 +28,9 @@ def check_password():
     else:
         return True
 
+# ----------------------------
+# File Reading
+# ----------------------------
 def extract_text_from_pdf(file):
     reader = PdfReader(file)
     text = ""
@@ -36,6 +42,9 @@ def extract_text_from_docx(file):
     doc = Document(file)
     return "\n".join([para.text for para in doc.paragraphs])
 
+# ----------------------------
+# NHS Experience Duration
+# ----------------------------
 def merge_intervals(intervals):
     if not intervals:
         return []
@@ -76,9 +85,25 @@ def extract_nhs_experience_years(text):
     years = round(total_months / 12, 1)
     return years
 
+# ----------------------------
+# Field Extraction
+# ----------------------------
 def extract_fields(text):
+    # Custom current employment status
+    status_match = re.search(r'(?i)(currently|presently)?\s*(employed|working|employed by)?\s*(as\s*\w+)?\s*(at|in)?\s*(.*?NHS Trust)', text)
+    if status_match:
+        current_status = "Currently working"
+        current_trust = status_match.group(5).strip()
+        current_grade = ""
+        grade_match = re.search(r'\bST\d\b|\bFY\d\b|\bConsultant\b|\bSHO\b|\bRegistrar\b', status_match.group(0), re.IGNORECASE)
+        if grade_match:
+            current_grade = grade_match.group(0).upper()
+    else:
+        current_status = "Not currently stated"
+        current_trust = ""
+        current_grade = ""
+
     fields = {
-        "Employment Status": re.search(r"(?i)(employment status)[:\-]?\s*(.+)", text),
         "GMC Registration": re.search(r"(?i)GMC\s*(number|registration)[:\-]?\s*([\w\d]+)", text),
         "Specialties": re.search(r"(?i)(specialt(y|ies))[:\-]?\s*(.+)", text),
         "Grade Level": re.search(r"(?i)(grade level|current grade)[:\-]?\s*(.+)", text),
@@ -92,7 +117,11 @@ def extract_fields(text):
         "Expected Pay Rate": re.search(r"(?i)(expected pay rate|rate expected)[:\-]?\s*([$£]?\d+)", text),
     }
 
-    result = {}
+    result = {
+        "Employment Status": current_status,
+        "Current Trust": current_trust
+    }
+
     for key, match in fields.items():
         if match:
             if key == "GMC Registration":
@@ -102,21 +131,25 @@ def extract_fields(text):
         else:
             result[key] = ""
 
-    nhs_years = extract_nhs_experience_years(text)
-    result["NHS Experience (Years)"] = f"{nhs_years} years" if nhs_years > 0 else ""
+    if not result["Grade Level"]:
+        result["Grade Level"] = current_grade
+
+    result["NHS Experience (Years)"] = f"{extract_nhs_experience_years(text)} years"
 
     return result
 
+# ----------------------------
+# Streamlit UI
+# ----------------------------
 if check_password():
     st.title("🧾 CV Screening Tool")
-    st.write("Upload single or multiple CVs (PDF or DOCX). Fields will be auto-extracted and displayed below.")
+    st.write("Upload one or more CVs (PDF or DOCX). We’ll extract relevant details automatically.")
 
     multiple = st.radio("How many CVs are you uploading?", ["Single", "Multiple"])
     uploaded_files = st.file_uploader("Upload CV(s):", type=["pdf", "docx"], accept_multiple_files=(multiple == "Multiple"))
 
     if uploaded_files:
         data = []
-
         files_to_process = uploaded_files if isinstance(uploaded_files, list) else [uploaded_files]
 
         for file in files_to_process:
@@ -134,8 +167,8 @@ if check_password():
             data.append(extracted)
 
         df = pd.DataFrame(data)
-        st.success("✅ Extraction completed.")
+        st.success("✅ Extraction complete!")
         st.dataframe(df)
 
         csv = df.to_csv(index=False).encode("utf-8")
-        st.download_button("📥 Download CSV", data=csv, file_name="cv_screening_results.csv", mime="text/csv")
+        st.download_button("📥 Download as CSV", data=csv, file_name="cv_screening_results.csv", mime="text/csv")
