@@ -38,7 +38,7 @@ def extract_text_from_docx(file):
 def extract_fields(text):
     fields = {
         "Employment Status": re.search(r"(?i)(employment status)[:\-]?\s*(.+)", text),
-        "GMC Registration": re.search(r"(?i)(GMC\s*(number|registration))[:\-]?\s*(.+)", text),
+        "GMC Registration": re.search(r"(?i)GMC\s*(number|registration)[:\-]?\s*([\w\d]+)", text),
         "Specialties": re.search(r"(?i)(specialt(y|ies))[:\-]?\s*(.+)", text),
         "Grade Level": re.search(r"(?i)(grade level|current grade)[:\-]?\s*(.+)", text),
         "Postal Code": re.search(r"\b[A-Z]{1,2}\d{1,2}\s?\d[A-Z]{2}\b", text),
@@ -55,7 +55,11 @@ def extract_fields(text):
     result = {}
     for key, match in fields.items():
         if match:
-            result[key] = match.group(len(match.groups()))
+            # For GMC Registration, get group 2; for others, get last group
+            if key == "GMC Registration":
+                result[key] = match.group(2)
+            else:
+                result[key] = match.group(len(match.groups()))
         else:
             result[key] = ""
     return result
