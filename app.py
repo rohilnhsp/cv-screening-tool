@@ -1,10 +1,11 @@
-
 import os
 import re
 import streamlit as st
 from PyPDF2 import PdfReader
 from docx import Document
 import pandas as pd
+from dateutil import parser
+from datetime import datetime
 
 def check_password():
     def password_entered():
@@ -35,6 +36,29 @@ def extract_text_from_docx(file):
     doc = Document(file)
     return "\n".join([para.text for para in doc.paragraphs])
 
+def extract_nhs_experience_years(text):
+    date_range_pattern = re.compile(
+        r'((Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)?\s?\d{4})\s?[-to]{1,3}\s?(Present|\d{4})',
+        re.IGNORECASE
+    )
+    total_months = 0
+    for match in date_range_pattern.finditer(text):
+        start_str = match.group(1)
+        end_str = match.group(3)
+        try:
+            start_date = parser.parse(start_str)
+            if end_str.lower() == 'present':
+                end_date = datetime.now()
+            else:
+                end_date = parser.parse(end_str)
+            diff = (end_date.year - start_date.year) * 12 + (end_date.month - start_date.month)
+            if diff > 0:
+                total_months += diff
+        except:
+            continue
+    years = round(total_months / 12, 1)
+    return years
+
 def extract_fields(text):
     fields = {
         "Employment Status": re.search(r"(?i)(employment status)[:\-]?\s*(.+)", text),
@@ -44,7 +68,6 @@ def extract_fields(text):
         "Postal Code": re.search(r"\b[A-Z]{1,2}\d{1,2}\s?\d[A-Z]{2}\b", text),
         "Preferred Trust/Location": re.search(r"(?i)(prefer.*trust|prefer.*location)[:\-]?\s*(.+)", text),
         "Visa Status": re.search(r"(?i)(visa status)[:\-]?\s*(.+)", text),
-        "NHS Experience": re.search(r"(?i)(NHS experience|worked in NHS)[:\-]?\s*(.+)", text),
         "DBS Status": re.search(r"(?i)(DBS status|current DBS)[:\-]?\s*(.+)", text),
         "BLS/ALS/MT": re.search(r"(?i)(BLS|ALS|manual handling).{0,50}", text),
         "Availability to Start": re.search(r"(?i)(available to start|availability)[:\-]?\s*(.+)", text),
@@ -55,13 +78,17 @@ def extract_fields(text):
     result = {}
     for key, match in fields.items():
         if match:
-            # For GMC Registration, get group 2; for others, get last group
             if key == "GMC Registration":
                 result[key] = match.group(2)
             else:
                 result[key] = match.group(len(match.groups()))
         else:
             result[key] = ""
+
+    # Calculate NHS experience years separately and add
+    nhs_years = extract_nhs_experience_years(text)
+    result["NHS Experience (Years)"] = f"{nhs_years} years" if nhs_years > 0 else ""
+
     return result
 
 if check_password():
@@ -73,9 +100,9 @@ if check_password():
 
     if uploaded_files:
         data = []
-        
+
         files_to_process = uploaded_files if isinstance(uploaded_files, list) else [uploaded_files]
-        
+
         for file in files_to_process:
             ext = os.path.splitext(file.name)[1].lower()
             if ext == ".pdf":
