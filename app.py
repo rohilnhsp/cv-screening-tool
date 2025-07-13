@@ -1,174 +1,119 @@
-import os
-import re
 import streamlit as st
-from PyPDF2 import PdfReader
-from docx import Document
-import pandas as pd
-from dateutil import parser
-from datetime import datetime
+import spacy
+import re
+from io import StringIO
+from pdfminer.high_level import extract_text
 
-# ----------------------------
-# Password Protection
-# ----------------------------
-def check_password():
-    def password_entered():
-        if st.session_state["password"] == "cvsecure2024":
-            st.session_state["password_correct"] = True
-            del st.session_state["password"]
-        else:
-            st.session_state["password_correct"] = False
+# Load spaCy model once
+@st.cache_resource
+def load_spacy_model():
+    return spacy.load("en_core_web_sm")
 
-    if "password_correct" not in st.session_state:
-        st.text_input("Enter password:", type="password", on_change=password_entered, key="password")
-        return False
-    elif not st.session_state["password_correct"]:
-        st.text_input("Enter password:", type="password", on_change=password_entered, key="password")
-        st.error("😕 Password incorrect")
-        return False
-    else:
-        return True
+nlp = load_spacy_model()
 
-# ----------------------------
-# File Reading
-# ----------------------------
-def extract_text_from_pdf(file):
-    reader = PdfReader(file)
-    text = ""
-    for page in reader.pages:
-        text += page.extract_text() + "\n"
-    return text
+def extract_text_from_pdf(pdf_file):
+    try:
+        return extract_text(pdf_file)
+    except Exception as e:
+        st.error(f"Error reading PDF: {e}")
+        return ""
 
-def extract_text_from_docx(file):
-    doc = Document(file)
-    return "\n".join([para.text for para in doc.paragraphs])
+def simple_keyword_search(text, keywords):
+    """Return True if any keyword is found in text (case-insensitive)."""
+    text = text.lower()
+    for kw in keywords:
+        if kw.lower() in text:
+            return True
+    return False
 
-# ----------------------------
-# NHS Experience Duration
-# ----------------------------
-def merge_intervals(intervals):
-    if not intervals:
-        return []
-    intervals.sort(key=lambda x: x[0])
-    merged = [intervals[0]]
-    for current in intervals[1:]:
-        last = merged[-1]
-        if current[0] <= last[1]:
-            merged[-1] = (last[0], max(last[1], current[1]))
-        else:
-            merged.append(current)
-    return merged
+def extract_field(pattern, text, flags=0):
+    """Extract first match from text using regex pattern."""
+    match = re.search(pattern, text, flags)
+    if match:
+        return match.group(1).strip()
+    return None
 
-def extract_nhs_experience_years(text):
-    date_range_pattern = re.compile(
-        r'((Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)?\s?\d{4})\s?[-to]{1,3}\s?(Present|\d{4})',
-        re.IGNORECASE
+def main():
+    st.title("📝 CV Screening Application")
+
+    st.markdown(
+        """
+        Upload a CV (PDF or TXT) and this app will extract key details such as:
+        - Current employment status
+        - GMC registration details
+        - Specialties
+        - Visa status
+        - NHS experience
+        - DBS status
+        - Training certifications (BLS/ALS)
+        - Availability
+        """
     )
-    intervals = []
-    for match in date_range_pattern.finditer(text):
-        start_str = match.group(1)
-        end_str = match.group(3)
-        try:
-            start_date = parser.parse(start_str)
-            end_date = datetime.now() if end_str.lower() == 'present' else parser.parse(end_str)
-            if start_date <= end_date:
-                intervals.append((start_date, end_date))
-        except:
-            continue
 
-    merged_intervals = merge_intervals(intervals)
+    uploaded_file = st.file_uploader("Upload CV", type=["pdf", "txt"])
 
-    total_months = 0
-    for start, end in merged_intervals:
-        diff = (end.year - start.year) * 12 + (end.month - start.month)
-        total_months += diff
-
-    years = round(total_months / 12, 1)
-    return years
-
-# ----------------------------
-# Field Extraction
-# ----------------------------
-def extract_fields(text):
-    # Custom current employment status
-    status_match = re.search(r'(?i)(currently|presently)?\s*(employed|working|employed by)?\s*(as\s*\w+)?\s*(at|in)?\s*(.*?NHS Trust)', text)
-    if status_match:
-        current_status = "Currently working"
-        current_trust = status_match.group(5).strip()
-        current_grade = ""
-        grade_match = re.search(r'\bST\d\b|\bFY\d\b|\bConsultant\b|\bSHO\b|\bRegistrar\b', status_match.group(0), re.IGNORECASE)
-        if grade_match:
-            current_grade = grade_match.group(0).upper()
-    else:
-        current_status = "Not currently stated"
-        current_trust = ""
-        current_grade = ""
-
-    fields = {
-        "GMC Registration": re.search(r"(?i)GMC\s*(number|registration)[:\-]?\s*([\w\d]+)", text),
-        "Specialties": re.search(r"(?i)(specialt(y|ies))[:\-]?\s*(.+)", text),
-        "Grade Level": re.search(r"(?i)(grade level|current grade)[:\-]?\s*(.+)", text),
-        "Postal Code": re.search(r"\b[A-Z]{1,2}\d{1,2}\s?\d[A-Z]{2}\b", text),
-        "Preferred Trust/Location": re.search(r"(?i)(prefer.*trust|prefer.*location)[:\-]?\s*(.+)", text),
-        "Visa Status": re.search(r"(?i)(visa status)[:\-]?\s*(.+)", text),
-        "DBS Status": re.search(r"(?i)(DBS status|current DBS)[:\-]?\s*(.+)", text),
-        "BLS/ALS/MT": re.search(r"(?i)(BLS|ALS|manual handling).{0,50}", text),
-        "Availability to Start": re.search(r"(?i)(available to start|availability)[:\-]?\s*(.+)", text),
-        "Shift Availability": re.search(r"(?i)(available for|shift preference)[:\-]?\s*(.+)", text),
-        "Expected Pay Rate": re.search(r"(?i)(expected pay rate|rate expected)[:\-]?\s*([$£]?\d+)", text),
-    }
-
-    result = {
-        "Employment Status": current_status,
-        "Current Trust": current_trust
-    }
-
-    for key, match in fields.items():
-        if match:
-            if key == "GMC Registration":
-                result[key] = match.group(2)
-            else:
-                result[key] = match.group(len(match.groups()))
+    if uploaded_file:
+        # Extract text from uploaded file
+        if uploaded_file.type == "application/pdf":
+            text = extract_text_from_pdf(uploaded_file)
         else:
-            result[key] = ""
+            stringio = StringIO(uploaded_file.getvalue().decode("utf-8"))
+            text = stringio.read()
 
-    if not result["Grade Level"]:
-        result["Grade Level"] = current_grade
+        st.subheader("Extracted Text Preview")
+        st.write(text[:1000] + "..." if len(text) > 1000 else text)
 
-    result["NHS Experience (Years)"] = f"{extract_nhs_experience_years(text)} years"
+        # Lowercase text for keyword matching
+        text_lower = text.lower()
 
-    return result
+        st.subheader("Extracted Information")
 
-# ----------------------------
-# Streamlit UI
-# ----------------------------
-if check_password():
-    st.title("🧾 CV Screening Tool")
-    st.write("Upload one or more CVs (PDF or DOCX). We’ll extract relevant details automatically.")
+        # Current employment status (look for keywords)
+        employment_keywords = ["currently employed", "unemployed", "on leave", "working as", "self-employed"]
+        employment_status = "Unknown"
+        for kw in employment_keywords:
+            if kw in text_lower:
+                employment_status = kw.capitalize()
+                break
+        st.write(f"**Employment Status:** {employment_status}")
 
-    multiple = st.radio("How many CVs are you uploading?", ["Single", "Multiple"])
-    uploaded_files = st.file_uploader("Upload CV(s):", type=["pdf", "docx"], accept_multiple_files=(multiple == "Multiple"))
+        # GMC Registration number (usually a 7 digit number)
+        gmc_pattern = r"(GMC\s*Number|GMC\s*Reg(?:istration)?\s*No\.?:?)\s*([0-9]{6,8})"
+        gmc = extract_field(gmc_pattern, text, flags=re.I)
+        st.write(f"**GMC Registration:** {gmc if gmc else 'Not found'}")
 
-    if uploaded_files:
-        data = []
-        files_to_process = uploaded_files if isinstance(uploaded_files, list) else [uploaded_files]
+        # Specialties (try to find some common specialties)
+        specialties = ["General Practice", "Psychiatry", "Paediatrics", "Emergency Medicine", "Anaesthetics", "Surgery", "Radiology"]
+        found_specialties = [spec for spec in specialties if spec.lower() in text_lower]
+        st.write(f"**Specialties:** {', '.join(found_specialties) if found_specialties else 'Not found'}")
 
-        for file in files_to_process:
-            ext = os.path.splitext(file.name)[1].lower()
-            if ext == ".pdf":
-                text = extract_text_from_pdf(file)
-            elif ext == ".docx":
-                text = extract_text_from_docx(file)
-            else:
-                st.warning(f"Unsupported file format: {file.name}")
-                continue
+        # Visa status
+        visa_keywords = ["british citizen", "indefinite leave to remain", "tier 2 visa", "work permit", "student visa"]
+        visa_status = next((kw for kw in visa_keywords if kw in text_lower), "Not found")
+        st.write(f"**Visa Status:** {visa_status}")
 
-            extracted = extract_fields(text)
-            extracted["File Name"] = file.name
-            data.append(extracted)
+        # NHS Experience (look for 'NHS' + years or phrases)
+        nhs_exp_pattern = r"NHS\s*(?:experience|worked|for)\s*(\d+)\s*(?:years|yrs)?"
+        nhs_exp = extract_field(nhs_exp_pattern, text, flags=re.I)
+        st.write(f"**NHS Experience (years):** {nhs_exp if nhs_exp else 'Not found'}")
 
-        df = pd.DataFrame(data)
-        st.success("✅ Extraction complete!")
-        st.dataframe(df)
+        # DBS status (Disclosure and Barring Service)
+        dbs_keywords = ["dbs cleared", "dbs certificate", "dbs check", "dbs pending"]
+        dbs_status = next((kw for kw in dbs_keywords if kw in text_lower), "Not found")
+        st.write(f"**DBS Status:** {dbs_status}")
 
-        csv = df.to_csv(index=False).encode("utf-8")
-        st.download_button("📥 Download as CSV", data=csv, file_name="cv_screening_results.csv", mime="text/csv")
+        # Training (BLS / ALS)
+        bls_keywords = ["bls certified", "basic life support", "bls training"]
+        als_keywords = ["als certified", "advanced life support", "als training"]
+        bls_status = next((kw for kw in bls_keywords if kw in text_lower), "Not found")
+        als_status = next((kw for kw in als_keywords if kw in text_lower), "Not found")
+        st.write(f"**BLS Training:** {bls_status}")
+        st.write(f"**ALS Training:** {als_status}")
+
+        # Availability (basic)
+        availability_keywords = ["full-time", "part-time", "ad hoc", "weekends", "immediate start"]
+        availability = [kw for kw in availability_keywords if kw in text_lower]
+        st.write(f"**Availability:** {', '.join(availability) if availability else 'Not found'}")
+
+if __name__ == "__main__":
+    main()
