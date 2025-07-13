@@ -36,26 +36,43 @@ def extract_text_from_docx(file):
     doc = Document(file)
     return "\n".join([para.text for para in doc.paragraphs])
 
+def merge_intervals(intervals):
+    if not intervals:
+        return []
+    intervals.sort(key=lambda x: x[0])
+    merged = [intervals[0]]
+    for current in intervals[1:]:
+        last = merged[-1]
+        if current[0] <= last[1]:
+            merged[-1] = (last[0], max(last[1], current[1]))
+        else:
+            merged.append(current)
+    return merged
+
 def extract_nhs_experience_years(text):
     date_range_pattern = re.compile(
         r'((Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)?\s?\d{4})\s?[-to]{1,3}\s?(Present|\d{4})',
         re.IGNORECASE
     )
-    total_months = 0
+    intervals = []
     for match in date_range_pattern.finditer(text):
         start_str = match.group(1)
         end_str = match.group(3)
         try:
             start_date = parser.parse(start_str)
-            if end_str.lower() == 'present':
-                end_date = datetime.now()
-            else:
-                end_date = parser.parse(end_str)
-            diff = (end_date.year - start_date.year) * 12 + (end_date.month - start_date.month)
-            if diff > 0:
-                total_months += diff
+            end_date = datetime.now() if end_str.lower() == 'present' else parser.parse(end_str)
+            if start_date <= end_date:
+                intervals.append((start_date, end_date))
         except:
             continue
+
+    merged_intervals = merge_intervals(intervals)
+
+    total_months = 0
+    for start, end in merged_intervals:
+        diff = (end.year - start.year) * 12 + (end.month - start.month)
+        total_months += diff
+
     years = round(total_months / 12, 1)
     return years
 
@@ -85,7 +102,6 @@ def extract_fields(text):
         else:
             result[key] = ""
 
-    # Calculate NHS experience years separately and add
     nhs_years = extract_nhs_experience_years(text)
     result["NHS Experience (Years)"] = f"{nhs_years} years" if nhs_years > 0 else ""
 
