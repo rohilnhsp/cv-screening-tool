@@ -69,8 +69,10 @@ if check_password():
 
     if uploaded_files:
         data = []
-
-        for file in uploaded_files:
+        
+        files_to_process = uploaded_files if isinstance(uploaded_files, list) else [uploaded_files]
+        
+        for file in files_to_process:
             ext = os.path.splitext(file.name)[1].lower()
             if ext == ".pdf":
                 text = extract_text_from_pdf(file)
